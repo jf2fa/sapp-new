@@ -22,7 +22,8 @@ model = load_model()
 
 # Function to call Azure OpenAI API for embeddings
 def call_azure_embeddings_api(texts, api_key, endpoint, deployment_name):
-    url = f"{endpoint}/openai/deployments/{deployment_name}/embeddings?api-version=2022-12-01"
+    api_version = "2022-12-01"
+    url = f"{endpoint}/openai/deployments/{deployment_name}/embeddings?api-version={api_version}"
     headers = {"Content-Type": "application/json", "api-key": api_key}
     response = requests.post(url, headers=headers, json={"input": texts})
     if response.status_code == 200:
@@ -32,12 +33,19 @@ def call_azure_embeddings_api(texts, api_key, endpoint, deployment_name):
 
 # Function to call Azure OpenAI API for chat
 def call_azure_chat_api(conversation, api_key, endpoint, deployment_name):
-    if not api_key or not endpoint or not deployment_name:
-        return "Missing credentials. Please provide the Azure OpenAI API Key, Endpoint URL, and Deployment Name."
-    llm = AzureOpenAI(api_key=api_key, api_base=endpoint, deployment_name=deployment_name)
-    prompt_template = PromptTemplate(input_variables=["conversation"], template="The following are some relevant entries based on the user's query:\n\n{conversation}\n\nBased on these entries, please provide a detailed response to the query:")
-    chain = load_qa_chain(llm=llm, prompt_template=prompt_template)
-    return chain.run(input_data={"conversation": conversation})
+    api_version = "2022-12-01"
+    url = f"{endpoint}/openai/deployments/{deployment_name}/chat/completions?api-version={api_version}"
+    headers = {"Content-Type": "application/json", "api-key": api_key}
+    data = {
+        "messages": [{"role": "system", "content": "You are an assistant."}, {"role": "user", "content": conversation}],
+        "max_tokens": 150,
+        "temperature": 0.7
+    }
+    response = requests.post(url, headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    st.error(f"API call failed: {response.status_code} - {response.text}")
+    return None
 
 # Initialize session state variables
 if 'embeddings' not in st.session_state:
@@ -99,10 +107,11 @@ if 'password_entered' not in st.session_state:
 if not st.session_state.password_entered:
     st.header("Password")
     pwd = st.text_input("Enter Password", type="password")
-    if pwd == "dema2024":
-        st.session_state.password_entered = True
-    elif pwd and pwd != "dema2024":
-        st.error("Incorrect password")
+    if st.button("Submit Password"):
+        if pwd == "dema2024":
+            st.session_state.password_entered = True
+        else:
+            st.error("Incorrect password")
 else:
     tab1, tab2, tab3 = st.tabs(["Chat", "Data", "Model Settings"])
 
@@ -176,16 +185,38 @@ else:
             else:
                 st.error("Precomputed data not found.")
 
-    # Model Settings Tab
+# Model Settings Tab
     with tab3:
         st.header("Model Settings")
+        
         st.subheader("Embedding Model Settings")
-        st.session_state.embedding_source = st.selectbox("Select Embedding Source", ["Local", "Azure"])
-        st.session_state.embedding_api_key = st.text_input("Enter Azure OpenAI API Key for Embeddings", type="password")
-        st.session_state.embedding_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Embeddings")
-        st.session_state.embedding_deployment_name = st.text_input("Enter Embedding Model Deployment Name")
+        embedding_api_key = st.text_input("Enter Azure OpenAI API Key for Embeddings", type="password")
+        embedding_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Embeddings")
+        embedding_deployment_name = st.text_input("Enter Embedding Model Deployment Name")
+        
+        if st.button("Submit Embedding Model Settings"):
+            st.session_state.embedding_api_key = embedding_api_key
+            st.session_state.embedding_endpoint = embedding_endpoint
+            st.session_state.embedding_deployment_name = embedding_deployment_name
+            
+            if st.session_state.embedding_api_key and st.session_state.embedding_endpoint and st.session_state.embedding_deployment_name:
+                st.success(f"**Embedding Model Configured:**")
+                st.write(f"API Key: {st.session_state.embedding_api_key}")
+                st.write(f"Endpoint: {st.session_state.embedding_endpoint}")
+                st.write(f"Deployment Name: {st.session_state.embedding_deployment_name}")
 
         st.subheader("Chat Model Settings")
-        st.session_state.chat_api_key = st.text_input("Enter Azure OpenAI API Key for Chat", type="password")
-        st.session_state.chat_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Chat")
-        st.session_state.chat_deployment_name = st.text_input("Enter Chat Model Deployment Name")
+        chat_api_key = st.text_input("Enter Azure OpenAI API Key for Chat", type="password")
+        chat_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Chat")
+        chat_deployment_name = st.text_input("Enter Chat Model Deployment Name")
+        
+        if st.button("Submit Chat Model Settings"):
+            st.session_state.chat_api_key = chat_api_key
+            st.session_state.chat_endpoint = chat_endpoint
+            st.session_state.chat_deployment_name = chat_deployment_name
+            
+            if st.session_state.chat_api_key and st.session_state.chat_endpoint and st.session_state.chat_deployment_name:
+                st.success(f"**Chat Model Configured:**")
+                st.write(f"API Key: {st.session_state.chat_api_key}")
+                st.write(f"Endpoint: {st.session_state.chat_endpoint}")
+                st.write(f"Deployment Name: {st.session_state.chat_deployment_name}")
