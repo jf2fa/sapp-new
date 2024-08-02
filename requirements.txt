@@ -4,4 +4,5 @@ numpy<2.0
 sentence-transformers
 torch
 requests
+langchain
 
