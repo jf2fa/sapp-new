@@ -18,5 +18,7 @@ cd sapp
 python -m venv env
 .\env\Scripts\activate
 
+pip install -r requirements.txt
+
 docker build -t semantic-search-app .
 docker run -p 8501:8501 semantic-search-app
