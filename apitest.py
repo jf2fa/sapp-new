@@ -1,4 +1,4 @@
-from openai import OpenAI
+import openai
 import os
 import pandas as pd
 
@@ -9,15 +9,16 @@ GPT4_ENDPOINT = "your-gpt4-endpoint"
 EMBEDDING_DEPLOYMENT = "text-embedding-3-small"
 GPT4_DEPLOYMENT = "gpt-4o"
 
-client = OpenAI(
-    api_key=AZURE_API_KEY  # This is also the default, it can be omitted
-)
+openai.api_type = "azure"
+openai.api_key = AZURE_API_KEY
+openai.api_base = EMBEDDING_ENDPOINT  # Endpoint for embeddings
+openai.api_version = "2022-12-01"  # Version of the Azure OpenAI API
 
 def test_embedding_api(text):
     try:
-        response = client.embeddings.create(
+        response = openai.Embedding.create(
             input=text,
-            model=EMBEDDING_DEPLOYMENT
+            engine=EMBEDDING_DEPLOYMENT
         )
         embedding = response['data'][0]['embedding']
         print("Embedding API test successful!")
@@ -27,8 +28,9 @@ def test_embedding_api(text):
 
 def test_chat_api(context, user_query):
     try:
-        response = client.chat.completions.create(
-            model=GPT4_DEPLOYMENT,
+        openai.api_base = GPT4_ENDPOINT  # Switch to chat endpoint
+        response = openai.ChatCompletion.create(
+            engine=GPT4_DEPLOYMENT,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": f"Context: {context}"},
