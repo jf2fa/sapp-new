@@ -1,17 +1,15 @@
 import streamlit as st
 import pandas as pd
 from openai import AzureOpenAI
-import pickle
 import os
-import torch
+import re
 
 # Set your Azure OpenAI API key and endpoints
 os.environ["AZURE_OPENAI_API_KEY"] = "your-azure-api-key"
 os.environ["AZURE_OPENAI_ENDPOINT"] = "https://your-resource-name.openai.azure.com/"
 AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
 AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-EMBEDDING_DEPLOYMENT = "text-embedding-3-small"
-GPT4_DEPLOYMENT = "gpt-4"
+GPT4_DEPLOYMENT = "gpt-35-turbo"
 
 client = AzureOpenAI(
     api_key=AZURE_API_KEY,
@@ -24,20 +22,8 @@ if 'AZURE_API_KEY' not in st.session_state:
     st.session_state['AZURE_API_KEY'] = AZURE_API_KEY
 if 'AZURE_ENDPOINT' not in st.session_state:
     st.session_state['AZURE_ENDPOINT'] = AZURE_ENDPOINT
-if 'EMBEDDING_DEPLOYMENT' not in st.session_state:
-    st.session_state['EMBEDDING_DEPLOYMENT'] = EMBEDDING_DEPLOYMENT
 if 'GPT4_DEPLOYMENT' not in st.session_state:
     st.session_state['GPT4_DEPLOYMENT'] = GPT4_DEPLOYMENT
-
-# Load precomputed embeddings and metadata if available
-if os.path.exists("precomputed_embeddings.pkl") and os.path.exists("precomputed_metadata.pkl"):
-    with open("precomputed_embeddings.pkl", "rb") as f:
-        precomputed_embeddings = torch.tensor(pickle.load(f))
-    with open("precomputed_metadata.pkl", "rb") as f:
-        precomputed_metadata = pickle.load(f)
-else:
-    precomputed_embeddings = None
-    precomputed_metadata = None
 
 # Preload CSV files
 preloaded_files = [
@@ -75,30 +61,30 @@ def check_password():
 def load_csv(file):
     return pd.read_csv(file)
 
-# Function to generate embeddings
-def generate_embeddings(text_data):
-    try:
-        response = client.embeddings.create(input=[text_data], model=st.session_state['EMBEDDING_DEPLOYMENT'])
-        embeddings = [data.embedding for data in response.data]
-        return embeddings
-    except Exception as e:
-        st.error(f"Error generating embeddings: {e}")
-        return None
+# Function to normalize text
+def normalize_text(s):
+    s = re.sub(r'\s+', ' ', s).strip()
+    s = re.sub(r". ,","",s)
+    s = s.replace("..",".")
+    s = s.replace(". .",".")
+    s = s.replace("\n", "")
+    s = s.strip()
+    return s
 
 # Function to get chat response
-def get_chat_response(context, query, embeddings=None):
+def get_chat_response(contexts, query):
     try:
-        prompt = f"Context: {context}\n\nUser: {query}\n\nAI:"
-        if embeddings:
-            prompt = f"Embeddings: {embeddings}\n\n{prompt}"
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": f"User: {query}"}
+        ]
         
-        response = client.create_chat_completion(
-            deployment_id=st.session_state['GPT4_DEPLOYMENT'],
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": f"Context: {context}"},
-                {"role": "user", "content": f"User: {query}"}
-            ],
+        for context in contexts:
+            messages.insert(1, {"role": "system", "content": f"Context from {context['file']}:\n{context['content']}"})
+        
+        response = client.chat.completions.create(
+            model=st.session_state['GPT4_DEPLOYMENT'],
+            messages=messages,
             max_tokens=150
         )
         response_text = response.choices[0].message['content']
@@ -107,13 +93,10 @@ def get_chat_response(context, query, embeddings=None):
         st.error(f"Error getting chat response: {e}")
         return None
 
-# Define mock embedding function for local testing
-def generate_mock_embedding(data):
-    return [[0.1] * 768]  # Example of an embedding with 768 dimensions
-
 # Define mock chat response function for local testing
-def mock_chat_response(context, query):
-    return "This is a mock response based on the context and query."
+def mock_chat_response(contexts, query):
+    context_files = ', '.join([context['file'] for context in contexts])
+    return f"This is a mock response based on the context from files: {context_files} and query: {query}"
 
 # Initialize session state for chat history, file selections, and CSV visibility
 if 'chat_history' not in st.session_state:
@@ -124,9 +107,6 @@ if 'selected_files' not in st.session_state:
 
 if 'csv_visibility' not in st.session_state:
     st.session_state['csv_visibility'] = {file: False for file in preloaded_files}
-
-if 'generated_embeddings' not in st.session_state:
-    st.session_state['generated_embeddings'] = False
 
 if check_password():
     st.sidebar.title("Navigation")
@@ -160,45 +140,13 @@ if check_password():
                     st.write(f"Preview of {new_file.name}:")
                     st.dataframe(load_csv(new_file))
 
-          # Generate embeddings
-        if st.button("Generate Embeddings"):
-            selected_files = [file for file, selected in st.session_state['selected_files'].items() if selected]
-            combined_data = pd.concat([load_csv(file) for file in selected_files])
-            text_data = combined_data.to_csv(index=False)
-
-            if st.session_state['AZURE_API_KEY'] == "your-azure-api-key":
-                embeddings = generate_mock_embedding(text_data)
-            else:
-                embeddings = generate_embeddings(text_data)
-
-            if embeddings:
-                with open("precomputed_embeddings.pkl", "wb") as f:
-                    pickle.dump(embeddings, f)
-                with open("precomputed_metadata.pkl", "wb") as f:
-                    pickle.dump(selected_files, f)
-
-                st.session_state['generated_embeddings'] = True
-                st.write("Embeddings generated and saved successfully!")
-                st.write(f"Number of embeddings: {len(embeddings)}")
-                st.write(f"Files used for embeddings: {', '.join(selected_files)}")
+        # Add to context
+        if st.button("Add to Context"):
+            st.session_state['context_files'] = [file for file, selected in st.session_state['selected_files'].items() if selected]
+            st.success("Files added to context.")
 
     elif page == "Model":
         st.title("Model Configuration")
-
-        with st.expander("Embedding Model Configuration"):
-            st.subheader("OpenAI API Credentials for Embedding Model")
-            embedding_api_key = st.text_input("Embedding API Key", type="password")
-            embedding_endpoint = st.text_input("Embedding Endpoint")
-            embedding_deployment = st.text_input("Embedding Deployment Name")
-
-            if st.button("Update Embedding Credentials"):
-                if embedding_api_key:
-                    st.session_state['AZURE_API_KEY'] = embedding_api_key
-                if embedding_endpoint:
-                    st.session_state['AZURE_ENDPOINT'] = embedding_endpoint
-                if embedding_deployment:
-                    st.session_state['EMBEDDING_DEPLOYMENT'] = embedding_deployment
-                st.success("Embedding credentials updated successfully!")
 
         with st.expander("Chat Model Configuration"):
             st.subheader("OpenAI API Credentials for Chat Model")
@@ -223,12 +171,19 @@ if check_password():
         if st.button("Send Query"):
             if user_query:
                 st.session_state['chat_history'].append(f"User: {user_query}")
+
+                # Gather contents from context files
+                context_files = st.session_state.get('context_files', [])
+                contexts = []
+                for file in context_files:
+                    df = load_csv(file)
+                    content = df.to_csv(index=False)
+                    contexts.append({"file": file, "content": content})
+
                 if st.session_state['AZURE_API_KEY'] == "your-azure-api-key":
-                    response_text = mock_chat_response(st.session_state['chat_history'], user_query)
+                    response_text = mock_chat_response(contexts, user_query)
                 else:
-                    context = "\n".join(st.session_state['chat_history'])
-                    selected_files = ', '.join(precomputed_metadata) if precomputed_metadata else "No files"
-                    response_text = get_chat_response(context, user_query, embeddings=precomputed_embeddings)
+                    response_text = get_chat_response(contexts, user_query)
                 st.session_state['chat_history'].append(f"AI: {response_text}")
 
         # Display chat history
