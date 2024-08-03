@@ -6,12 +6,18 @@ import json
 import pickle
 from concurrent.futures import ThreadPoolExecutor
 from sentence_transformers import SentenceTransformer, util
-from langchain_community.llms import AzureOpenAI
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
 
 # Set up page configuration
 st.set_page_config(page_title="Semantic Search App", layout="wide")
+
+# Manually set keys, names, and endpoints for models
+DEFAULT_EMBEDDING_API_KEY = "your_default_embedding_api_key"
+DEFAULT_EMBEDDING_ENDPOINT = "your_default_embedding_endpoint"
+DEFAULT_EMBEDDING_DEPLOYMENT_NAME = "your_default_embedding_deployment_name"
+
+DEFAULT_CHAT_API_KEY = "your_default_chat_api_key"
+DEFAULT_CHAT_ENDPOINT = "your_default_chat_endpoint"
+DEFAULT_CHAT_DEPLOYMENT_NAME = "your_default_chat_deployment_name"
 
 # Initialize local embedding model
 @st.cache_resource
@@ -22,8 +28,7 @@ model = load_model()
 
 # Function to call Azure OpenAI API for embeddings
 def call_azure_embeddings_api(texts, api_key, endpoint, deployment_name):
-    api_version = "2022-12-01"
-    url = f"{endpoint}/openai/deployments/{deployment_name}/embeddings?api-version={api_version}"
+    url = f"{endpoint}/openai/deployments/{deployment_name}/embeddings?api-version=2022-12-01"
     headers = {"Content-Type": "application/json", "api-key": api_key}
     response = requests.post(url, headers=headers, json={"input": texts})
     if response.status_code == 200:
@@ -33,23 +38,39 @@ def call_azure_embeddings_api(texts, api_key, endpoint, deployment_name):
 
 # Function to call Azure OpenAI API for chat
 def call_azure_chat_api(conversation, api_key, endpoint, deployment_name):
-    api_version = "2022-12-01"
-    url = f"{endpoint}/openai/deployments/{deployment_name}/chat/completions?api-version={api_version}"
+    if not api_key or not endpoint or not deployment_name:
+        return "Missing credentials. Please provide the Azure OpenAI API Key, Endpoint URL, and Deployment Name."
+    url = f"{endpoint}/openai/deployments/{deployment_name}/completions?api-version=2022-12-01"
     headers = {"Content-Type": "application/json", "api-key": api_key}
     data = {
-        "messages": [{"role": "system", "content": "You are an assistant."}, {"role": "user", "content": conversation}],
-        "max_tokens": 150,
-        "temperature": 0.7
+        "prompt": conversation,
+        "max_tokens": 150
     }
     response = requests.post(url, headers=headers, json=data)
     if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
+        return response.json()["choices"][0]["text"]
     st.error(f"API call failed: {response.status_code} - {response.text}")
     return None
 
 # Initialize session state variables
-if 'embeddings' not in st.session_state:
-    st.session_state.embeddings, st.session_state.metadata = torch.empty(0, dtype=torch.float32), []
+for key in ['embeddings', 'metadata', 'password_entered', 'embedding_source', 'embedding_api_key', 'embedding_endpoint', 'embedding_deployment_name', 'chat_api_key', 'chat_endpoint', 'chat_deployment_name', 'conversation_history', 'selected_files']:
+    if key not in st.session_state:
+        st.session_state[key] = None if key != 'password_entered' else False
+
+# Set default values if not set
+if st.session_state.embedding_api_key is None:
+    st.session_state.embedding_api_key = DEFAULT_EMBEDDING_API_KEY
+if st.session_state.embedding_endpoint is None:
+    st.session_state.embedding_endpoint = DEFAULT_EMBEDDING_ENDPOINT
+if st.session_state.embedding_deployment_name is None:
+    st.session_state.embedding_deployment_name = DEFAULT_EMBEDDING_DEPLOYMENT_NAME
+
+if st.session_state.chat_api_key is None:
+    st.session_state.chat_api_key = DEFAULT_CHAT_API_KEY
+if st.session_state.chat_endpoint is None:
+    st.session_state.chat_endpoint = DEFAULT_CHAT_ENDPOINT
+if st.session_state.chat_deployment_name is None:
+    st.session_state.chat_deployment_name = DEFAULT_CHAT_DEPLOYMENT_NAME
 
 # Load precomputed data if available
 def load_precomputed_data():
@@ -64,7 +85,7 @@ def load_precomputed_data():
         return torch.empty(0, dtype=torch.float32), []
 
 # Load precomputed data into session state
-if st.session_state.embeddings.numel() == 0:
+if st.session_state.embeddings is None or st.session_state.embeddings.numel() == 0:
     st.session_state.embeddings, st.session_state.metadata = load_precomputed_data()
 
 # Function to encode rows using local model
@@ -101,16 +122,13 @@ def semantic_search(query, top_k=5):
     return [(st.session_state.metadata[idx], score.item()) for idx, score in zip(top_results.indices, top_results.values)]
 
 # UI components
-if 'password_entered' not in st.session_state:
-    st.session_state.password_entered = False
-
 if not st.session_state.password_entered:
     st.header("Password")
     pwd = st.text_input("Enter Password", type="password")
     if st.button("Submit Password"):
         if pwd == "dema2024":
             st.session_state.password_entered = True
-        else:
+        elif pwd:
             st.error("Incorrect password")
 else:
     tab1, tab2, tab3 = st.tabs(["Chat", "Data", "Model Settings"])
@@ -118,7 +136,7 @@ else:
     # Chat Tab
     with tab1:
         st.header("Chat")
-        if 'conversation_history' not in st.session_state:
+        if st.session_state.conversation_history is None:
             st.session_state.conversation_history = []
 
         query = st.text_input("Enter your query:")
@@ -126,7 +144,7 @@ else:
         if st.button("Search"):
             if query:
                 with st.spinner("Searching..."):
-                    if st.session_state.embeddings.numel() > 0:
+                    if st.session_state.embeddings is not None and st.session_state.embeddings.numel() > 0:
                         results = semantic_search(query)
                         st.session_state.conversation_history.append(f"User: {query}")
                         
@@ -159,7 +177,7 @@ else:
     with tab2:
         st.header("Data")
         uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type=["csv"])
-        if 'selected_files' not in st.session_state:
+        if st.session_state.selected_files is None:
             st.session_state.selected_files = []
         if uploaded_files:
             for file in uploaded_files:
@@ -185,10 +203,9 @@ else:
             else:
                 st.error("Precomputed data not found.")
 
-# Model Settings Tab
+    # Model Settings Tab
     with tab3:
         st.header("Model Settings")
-        
         st.subheader("Embedding Model Settings")
         embedding_api_key = st.text_input("Enter Azure OpenAI API Key for Embeddings", type="password")
         embedding_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Embeddings")
@@ -198,12 +215,10 @@ else:
             st.session_state.embedding_api_key = embedding_api_key
             st.session_state.embedding_endpoint = embedding_endpoint
             st.session_state.embedding_deployment_name = embedding_deployment_name
-            
-            if st.session_state.embedding_api_key and st.session_state.embedding_endpoint and st.session_state.embedding_deployment_name:
-                st.success(f"**Embedding Model Configured:**")
-                st.write(f"API Key: {st.session_state.embedding_api_key}")
-                st.write(f"Endpoint: {st.session_state.embedding_endpoint}")
-                st.write(f"Deployment Name: {st.session_state.embedding_deployment_name}")
+            st.success("Embedding model settings updated:")
+            st.write(f"API Key: {st.session_state.embedding_api_key}")
+            st.write(f"Endpoint: {st.session_state.embedding_endpoint}")
+            st.write(f"Deployment Name: {st.session_state.embedding_deployment_name}")
 
         st.subheader("Chat Model Settings")
         chat_api_key = st.text_input("Enter Azure OpenAI API Key for Chat", type="password")
@@ -214,9 +229,7 @@ else:
             st.session_state.chat_api_key = chat_api_key
             st.session_state.chat_endpoint = chat_endpoint
             st.session_state.chat_deployment_name = chat_deployment_name
-            
-            if st.session_state.chat_api_key and st.session_state.chat_endpoint and st.session_state.chat_deployment_name:
-                st.success(f"**Chat Model Configured:**")
-                st.write(f"API Key: {st.session_state.chat_api_key}")
-                st.write(f"Endpoint: {st.session_state.chat_endpoint}")
-                st.write(f"Deployment Name: {st.session_state.chat_deployment_name}")
+            st.success("Chat model settings updated:")
+            st.write(f"API Key: {st.session_state.chat_api_key}")
+            st.write(f"Endpoint: {st.session_state.chat_endpoint}")
+            st.write(f"Deployment Name: {st.session_state.chat_deployment_name}")
