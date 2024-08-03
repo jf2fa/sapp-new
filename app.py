@@ -1,26 +1,31 @@
 import streamlit as st
 import pandas as pd
-import openai
+from openai import AzureOpenAI
 import pickle
 import os
 import torch
 
-# Placeholder variables for API keys and endpoints
-AZURE_API_KEY = "your-azure-api-key"
-EMBEDDING_ENDPOINT = "your-embedding-endpoint"
+# Set your Azure OpenAI API key and endpoints
+os.environ["AZURE_OPENAI_API_KEY"] = "your-azure-api-key"
+os.environ["AZURE_OPENAI_ENDPOINT"] = "https://your-resource-name.openai.azure.com/"
+AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 EMBEDDING_DEPLOYMENT = "text-embedding-3-small"
-GPT4_ENDPOINT = "your-gpt4-endpoint"
-GPT4_DEPLOYMENT = "gpt-4o"
+GPT4_DEPLOYMENT = "gpt-4"
+
+client = AzureOpenAI(
+    api_key=AZURE_API_KEY,
+    api_version="2024-02-01",
+    azure_endpoint=AZURE_ENDPOINT
+)
 
 # Initialize session state for API keys and endpoints
 if 'AZURE_API_KEY' not in st.session_state:
     st.session_state['AZURE_API_KEY'] = AZURE_API_KEY
-if 'EMBEDDING_ENDPOINT' not in st.session_state:
-    st.session_state['EMBEDDING_ENDPOINT'] = EMBEDDING_ENDPOINT
+if 'AZURE_ENDPOINT' not in st.session_state:
+    st.session_state['AZURE_ENDPOINT'] = AZURE_ENDPOINT
 if 'EMBEDDING_DEPLOYMENT' not in st.session_state:
     st.session_state['EMBEDDING_DEPLOYMENT'] = EMBEDDING_DEPLOYMENT
-if 'GPT4_ENDPOINT' not in st.session_state:
-    st.session_state['GPT4_ENDPOINT'] = GPT4_ENDPOINT
 if 'GPT4_DEPLOYMENT' not in st.session_state:
     st.session_state['GPT4_DEPLOYMENT'] = GPT4_DEPLOYMENT
 
@@ -73,12 +78,8 @@ def load_csv(file):
 # Function to generate embeddings
 def generate_embeddings(text_data):
     try:
-        openai.api_key = st.session_state['AZURE_API_KEY']
-        response = openai.Embedding.create(
-            input=text_data,
-            model=st.session_state['EMBEDDING_DEPLOYMENT']
-        )
-        embeddings = [data['embedding'] for data in response['data']]
+        response = client.embeddings.create(input=[text_data], model=st.session_state['EMBEDDING_DEPLOYMENT'])
+        embeddings = [data.embedding for data in response.data]
         return embeddings
     except Exception as e:
         st.error(f"Error generating embeddings: {e}")
@@ -87,17 +88,20 @@ def generate_embeddings(text_data):
 # Function to get chat response
 def get_chat_response(context, query, embeddings=None):
     try:
-        openai.api_key = st.session_state['AZURE_API_KEY']
         prompt = f"Context: {context}\n\nUser: {query}\n\nAI:"
         if embeddings:
             prompt = f"Embeddings: {embeddings}\n\n{prompt}"
         
-        response = openai.Completion.create(
-            model=st.session_state['GPT4_DEPLOYMENT'],
-            prompt=prompt,
+        response = client.create_chat_completion(
+            deployment_id=st.session_state['GPT4_DEPLOYMENT'],
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": f"Context: {context}"},
+                {"role": "user", "content": f"User: {query}"}
+            ],
             max_tokens=150
         )
-        response_text = response['choices'][0]['text']
+        response_text = response.choices[0].message['content']
         return response_text
     except Exception as e:
         st.error(f"Error getting chat response: {e}")
@@ -156,7 +160,7 @@ if check_password():
                     st.write(f"Preview of {new_file.name}:")
                     st.dataframe(load_csv(new_file))
 
-        # Generate embeddings
+          # Generate embeddings
         if st.button("Generate Embeddings"):
             selected_files = [file for file, selected in st.session_state['selected_files'].items() if selected]
             combined_data = pd.concat([load_csv(file) for file in selected_files])
@@ -167,7 +171,7 @@ if check_password():
             else:
                 embeddings = generate_embeddings(text_data)
 
-            if embeddings is not None:
+            if embeddings:
                 with open("precomputed_embeddings.pkl", "wb") as f:
                     pickle.dump(embeddings, f)
                 with open("precomputed_metadata.pkl", "wb") as f:
@@ -183,26 +187,32 @@ if check_password():
 
         with st.expander("Embedding Model Configuration"):
             st.subheader("OpenAI API Credentials for Embedding Model")
-            embedding_api_key = st.text_input("Embedding API Key", type="password", value=st.session_state['AZURE_API_KEY'])
-            embedding_endpoint = st.text_input("Embedding Endpoint", value=st.session_state['EMBEDDING_ENDPOINT'])
-            embedding_deployment = st.text_input("Embedding Deployment Name", value=st.session_state['EMBEDDING_DEPLOYMENT'])
+            embedding_api_key = st.text_input("Embedding API Key", type="password")
+            embedding_endpoint = st.text_input("Embedding Endpoint")
+            embedding_deployment = st.text_input("Embedding Deployment Name")
 
             if st.button("Update Embedding Credentials"):
-                st.session_state['AZURE_API_KEY'] = embedding_api_key
-                st.session_state['EMBEDDING_ENDPOINT'] = embedding_endpoint
-                st.session_state['EMBEDDING_DEPLOYMENT'] = embedding_deployment
+                if embedding_api_key:
+                    st.session_state['AZURE_API_KEY'] = embedding_api_key
+                if embedding_endpoint:
+                    st.session_state['AZURE_ENDPOINT'] = embedding_endpoint
+                if embedding_deployment:
+                    st.session_state['EMBEDDING_DEPLOYMENT'] = embedding_deployment
                 st.success("Embedding credentials updated successfully!")
 
         with st.expander("Chat Model Configuration"):
             st.subheader("OpenAI API Credentials for Chat Model")
-            gpt4_api_key = st.text_input("Chat API Key", type="password", value=st.session_state['AZURE_API_KEY'])
-            gpt4_endpoint = st.text_input("Chat Endpoint", value=st.session_state['GPT4_ENDPOINT'])
-            gpt4_deployment = st.text_input("Chat Deployment Name", value=st.session_state['GPT4_DEPLOYMENT'])
+            gpt4_api_key = st.text_input("Chat API Key", type="password")
+            gpt4_endpoint = st.text_input("Chat Endpoint")
+            gpt4_deployment = st.text_input("Chat Deployment Name")
 
             if st.button("Update Chat Credentials"):
-                st.session_state['AZURE_API_KEY'] = gpt4_api_key
-                st.session_state['GPT4_ENDPOINT'] = gpt4_endpoint
-                st.session_state['GPT4_DEPLOYMENT'] = gpt4_deployment
+                if gpt4_api_key:
+                    st.session_state['AZURE_API_KEY'] = gpt4_api_key
+                if gpt4_endpoint:
+                    st.session_state['AZURE_ENDPOINT'] = gpt4_endpoint
+                if gpt4_deployment:
+                    st.session_state['GPT4_DEPLOYMENT'] = gpt4_deployment
                 st.success("Chat credentials updated successfully!")
 
     elif page == "Chat":
@@ -213,20 +223,15 @@ if check_password():
         if st.button("Send Query"):
             if user_query:
                 st.session_state['chat_history'].append(f"User: {user_query}")
-                context = "\n".join(st.session_state['chat_history'])
-                selected_files = ', '.join([file for file in precomputed_metadata]) if precomputed_metadata else "No files"
-
                 if st.session_state['AZURE_API_KEY'] == "your-azure-api-key":
-                    response_text = mock_chat_response(context, user_query)
+                    response_text = mock_chat_response(st.session_state['chat_history'], user_query)
                 else:
-                    response_text = get_chat_response(context, user_query, precomputed_embeddings)
-                
-                if response_text is not None:
-                    st.session_state['chat_history'].append(f"AI: {response_text}")
-        
+                    context = "\n".join(st.session_state['chat_history'])
+                    selected_files = ', '.join(precomputed_metadata) if precomputed_metadata else "No files"
+                    response_text = get_chat_response(context, user_query, embeddings=precomputed_embeddings)
+                st.session_state['chat_history'].append(f"AI: {response_text}")
+
         # Display chat history
         st.write("### Chat History")
         for message in reversed(st.session_state['chat_history']):
             st.write(message)
-
-   
