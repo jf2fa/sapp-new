@@ -1,4 +1,4 @@
-import openai
+from openai import OpenAI
 import os
 import pandas as pd
 
@@ -9,14 +9,15 @@ GPT4_ENDPOINT = "your-gpt4-endpoint"
 EMBEDDING_DEPLOYMENT = "text-embedding-3-small"
 GPT4_DEPLOYMENT = "gpt-4o"
 
-openai.api_key = AZURE_API_KEY
+client = OpenAI(
+    api_key=AZURE_API_KEY  # This is also the default, it can be omitted
+)
 
 def test_embedding_api(text):
     try:
-        response = openai.Embedding.create(
+        response = client.embeddings.create(
             input=text,
-            engine=EMBEDDING_DEPLOYMENT,
-            endpoint=EMBEDDING_ENDPOINT
+            model=EMBEDDING_DEPLOYMENT
         )
         embedding = response['data'][0]['embedding']
         print("Embedding API test successful!")
@@ -26,13 +27,16 @@ def test_embedding_api(text):
 
 def test_chat_api(context, user_query):
     try:
-        response = openai.Completion.create(
-            engine=GPT4_DEPLOYMENT,
-            prompt=f"Context: {context}\n\nUser: {user_query}\n\nAI:",
-            max_tokens=150,
-            endpoint=GPT4_ENDPOINT
+        response = client.chat.completions.create(
+            model=GPT4_DEPLOYMENT,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": f"Context: {context}"},
+                {"role": "user", "content": f"User: {user_query}"}
+            ],
+            max_tokens=150
         )
-        response_text = response['choices'][0]['text']
+        response_text = response['choices'][0]['message']['content']
         print("Chat API test successful!")
         print(f"AI Response: {response_text}")
     except Exception as e:
