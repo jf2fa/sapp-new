@@ -1,235 +1,232 @@
 import streamlit as st
 import pandas as pd
-import torch
-import requests
-import json
+import openai
 import pickle
-from concurrent.futures import ThreadPoolExecutor
-from sentence_transformers import SentenceTransformer, util
+import os
+import torch
 
-# Set up page configuration
-st.set_page_config(page_title="Semantic Search App", layout="wide")
+# Placeholder variables for API keys and endpoints
+AZURE_API_KEY = "your-azure-api-key"
+EMBEDDING_ENDPOINT = "your-embedding-endpoint"
+EMBEDDING_DEPLOYMENT = "your-embedding-deployment"
+GPT4_ENDPOINT = "your-gpt4-endpoint"
+GPT4_DEPLOYMENT = "your-gpt4-deployment"
 
-# Manually set keys, names, and endpoints for models
-DEFAULT_EMBEDDING_API_KEY = "your_default_embedding_api_key"
-DEFAULT_EMBEDDING_ENDPOINT = "your_default_embedding_endpoint"
-DEFAULT_EMBEDDING_DEPLOYMENT_NAME = "your_default_embedding_deployment_name"
+# Initialize session state for API keys and endpoints
+if 'AZURE_API_KEY' not in st.session_state:
+    st.session_state['AZURE_API_KEY'] = AZURE_API_KEY
+if 'EMBEDDING_ENDPOINT' not in st.session_state:
+    st.session_state['EMBEDDING_ENDPOINT'] = EMBEDDING_ENDPOINT
+if 'EMBEDDING_DEPLOYMENT' not in st.session_state:
+    st.session_state['EMBEDDING_DEPLOYMENT'] = EMBEDDING_DEPLOYMENT
+if 'GPT4_ENDPOINT' not in st.session_state:
+    st.session_state['GPT4_ENDPOINT'] = GPT4_ENDPOINT
+if 'GPT4_DEPLOYMENT' not in st.session_state:
+    st.session_state['GPT4_DEPLOYMENT'] = GPT4_DEPLOYMENT
 
-DEFAULT_CHAT_API_KEY = "your_default_chat_api_key"
-DEFAULT_CHAT_ENDPOINT = "your_default_chat_endpoint"
-DEFAULT_CHAT_DEPLOYMENT_NAME = "your_default_chat_deployment_name"
-
-# Initialize local embedding model
-@st.cache_resource
-def load_model():
-    return SentenceTransformer('all-mpnet-base-v2')
-
-model = load_model()
-
-# Function to call Azure OpenAI API for embeddings
-def call_azure_embeddings_api(texts, api_key, endpoint, deployment_name):
-    url = f"{endpoint}/openai/deployments/{deployment_name}/embeddings?api-version=2022-12-01"
-    headers = {"Content-Type": "application/json", "api-key": api_key}
-    response = requests.post(url, headers=headers, json={"input": texts})
-    if response.status_code == 200:
-        return response.json()["data"]
-    st.error(f"API call failed: {response.status_code} - {response.text}")
-    return None
-
-# Function to call Azure OpenAI API for chat
-def call_azure_chat_api(conversation, api_key, endpoint, deployment_name):
-    if not api_key or not endpoint or not deployment_name:
-        return "Missing credentials. Please provide the Azure OpenAI API Key, Endpoint URL, and Deployment Name."
-    url = f"{endpoint}/openai/deployments/{deployment_name}/completions?api-version=2022-12-01"
-    headers = {"Content-Type": "application/json", "api-key": api_key}
-    data = {
-        "prompt": conversation,
-        "max_tokens": 150
-    }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        return response.json()["choices"][0]["text"]
-    st.error(f"API call failed: {response.status_code} - {response.text}")
-    return None
-
-# Initialize session state variables
-for key in ['embeddings', 'metadata', 'password_entered', 'embedding_source', 'embedding_api_key', 'embedding_endpoint', 'embedding_deployment_name', 'chat_api_key', 'chat_endpoint', 'chat_deployment_name', 'conversation_history', 'selected_files']:
-    if key not in st.session_state:
-        st.session_state[key] = None if key != 'password_entered' else False
-
-# Set default values if not set
-if st.session_state.embedding_api_key is None:
-    st.session_state.embedding_api_key = DEFAULT_EMBEDDING_API_KEY
-if st.session_state.embedding_endpoint is None:
-    st.session_state.embedding_endpoint = DEFAULT_EMBEDDING_ENDPOINT
-if st.session_state.embedding_deployment_name is None:
-    st.session_state.embedding_deployment_name = DEFAULT_EMBEDDING_DEPLOYMENT_NAME
-
-if st.session_state.chat_api_key is None:
-    st.session_state.chat_api_key = DEFAULT_CHAT_API_KEY
-if st.session_state.chat_endpoint is None:
-    st.session_state.chat_endpoint = DEFAULT_CHAT_ENDPOINT
-if st.session_state.chat_deployment_name is None:
-    st.session_state.chat_deployment_name = DEFAULT_CHAT_DEPLOYMENT_NAME
-
-# Load precomputed data if available
-def load_precomputed_data():
-    try:
-        with open('precomputed_embeddings.pkl', 'rb') as f:
-            embeddings = pickle.load(f)
-        with open('precomputed_metadata.pkl', 'rb') as f:
-            metadata = pickle.load(f)
-        embeddings = [torch.tensor(e) for e in embeddings]
-        return torch.stack(embeddings), metadata
-    except FileNotFoundError:
-        return torch.empty(0, dtype=torch.float32), []
-
-# Load precomputed data into session state
-if st.session_state.embeddings is None or st.session_state.embeddings.numel() == 0:
-    st.session_state.embeddings, st.session_state.metadata = load_precomputed_data()
-
-# Function to encode rows using local model
-def encode_rows_locally(rows):
-    return model.encode(rows, convert_to_tensor=True)
-
-# Function to encode rows using Azure model
-def encode_rows_azure(rows, api_key, endpoint, deployment_name):
-    results = call_azure_embeddings_api(rows, api_key, endpoint, deployment_name)
-    if results:
-        embeddings = [torch.tensor(result["embedding"]) for result in results]
-        return torch.stack(embeddings) if embeddings else torch.empty(0, dtype=torch.float32)
-    return torch.empty(0, dtype=torch.float32)
-
-# Function to rebuild context
-def rebuild_context(files, embedding_source, api_key, endpoint, deployment_name):
-    embeddings = []
-    metadata = []
-    for file in files:
-        df = pd.read_csv(file)
-        rows = [row.to_json() for _, row in df.iterrows()]
-        encoded_rows = encode_rows_locally(rows) if embedding_source == "Local" else encode_rows_azure(rows, api_key, endpoint, deployment_name)
-        embeddings.extend(encoded_rows)
-        metadata.extend([{'file': file.name, 'row': row} for row in rows])
-    st.session_state.embeddings = torch.stack(embeddings) if embeddings else torch.empty(0, dtype=torch.float32)
-    st.session_state.metadata = metadata
-    st.info(f"Rebuilt vector database with {len(files)} files.")
-
-# Function to perform semantic search
-def semantic_search(query, top_k=5):
-    query_embedding = model.encode(query, convert_to_tensor=True)
-    cos_scores = util.pytorch_cos_sim(query_embedding, st.session_state.embeddings)[0]
-    top_results = torch.topk(cos_scores, k=top_k)
-    return [(st.session_state.metadata[idx], score.item()) for idx, score in zip(top_results.indices, top_results.values)]
-
-# UI components
-if not st.session_state.password_entered:
-    st.header("Password")
-    pwd = st.text_input("Enter Password", type="password")
-    if st.button("Submit Password"):
-        if pwd == "dema2024":
-            st.session_state.password_entered = True
-        elif pwd:
-            st.error("Incorrect password")
+# Load precomputed embeddings and metadata if available
+if os.path.exists("precomputed_embeddings.pkl") and os.path.exists("precomputed_metadata.pkl"):
+    with open("precomputed_embeddings.pkl", "rb") as f:
+        precomputed_embeddings = torch.tensor(pickle.load(f))
+    with open("precomputed_metadata.pkl", "rb") as f:
+        precomputed_metadata = pickle.load(f)
 else:
-    tab1, tab2, tab3 = st.tabs(["Chat", "Data", "Model Settings"])
+    precomputed_embeddings = None
+    precomputed_metadata = None
 
-    # Chat Tab
-    with tab1:
-        st.header("Chat")
-        if st.session_state.conversation_history is None:
-            st.session_state.conversation_history = []
+# Preload CSV files
+preloaded_files = [
+    "synthetic_survey_responses_1.csv",
+    "synthetic_survey_responses_2.csv",
+    "synthetic_survey_responses_3.csv",
+    "synthetic_survey_responses.csv"
+]
 
-        query = st.text_input("Enter your query:")
+uploaded_files = []
 
-        if st.button("Search"):
-            if query:
-                with st.spinner("Searching..."):
-                    if st.session_state.embeddings is not None and st.session_state.embeddings.numel() > 0:
-                        results = semantic_search(query)
-                        st.session_state.conversation_history.append(f"User: {query}")
-                        
-                        # Check if chat model credentials are provided
-                        if st.session_state.chat_api_key and st.session_state.chat_endpoint and st.session_state.chat_deployment_name:
-                            conversation = "\n".join(st.session_state.conversation_history)
-                            prompt = f"The following are some relevant entries based on the user's query:\n\n{conversation}\n\nBased on these entries, please provide a detailed response to the query: {query}"
-                            response = call_azure_chat_api(prompt, st.session_state.chat_api_key, st.session_state.chat_endpoint, st.session_state.chat_deployment_name)
-                            if response:
-                                st.session_state.conversation_history.append(f"OpenAI: {response}")
-                                st.write(f"OpenAI: {response}")
-                            else:
-                                st.session_state.conversation_history.append("LangChain is working, but no response from the chat model due to missing or invalid credentials.")
-                                st.write("LangChain is working, but no response from the chat model due to missing or invalid credentials.")
-                        else:
-                            st.write("Top results:")
-                            for result in results:
-                                st.write(f"File: {result[0]['file']}, Row: {result[0]['row']}, Score: {result[1]}")
-                            st.session_state.conversation_history.append(f"Results: {', '.join([result[0]['row'] for result in results])}")
-                    else:
-                        st.warning("No embeddings found. Please rebuild context with selected data sources.")
+# Simple password-based authentication
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "dema":
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Remove password from state after checking
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input + error
+        st.text_input("Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    else:
+        # Password correct
+        return True
+
+# Function to load a CSV file
+def load_csv(file):
+    return pd.read_csv(file)
+
+# Function to generate embeddings
+def generate_embeddings(text_data):
+    try:
+        openai.api_key = st.session_state['AZURE_API_KEY']
+        response = openai.Embedding.create(
+            input=text_data,
+            engine=st.session_state['EMBEDDING_DEPLOYMENT'],
+            endpoint=st.session_state['EMBEDDING_ENDPOINT']
+        )
+        embeddings = [data['embedding'] for data in response['data']]
+        return embeddings
+    except Exception as e:
+        st.error(f"Error generating embeddings: {e}")
+        return None
+
+# Function to get chat response
+def get_chat_response(context, query, embeddings=None):
+    try:
+        openai.api_key = st.session_state['AZURE_API_KEY']
+        prompt = f"Context: {context}\n\nUser: {query}\n\nAI:"
+        if embeddings:
+            prompt = f"Embeddings: {embeddings}\n\n{prompt}"
+        
+        response = openai.Completion.create(
+            engine=st.session_state['GPT4_DEPLOYMENT'],
+            prompt=prompt,
+            max_tokens=150,
+            endpoint=st.session_state['GPT4_ENDPOINT']
+        )
+        response_text = response['choices'][0]['text']
+        return response_text
+    except Exception as e:
+        st.error(f"Error getting chat response: {e}")
+        return None
+
+# Define mock embedding function for local testing
+def generate_mock_embedding(data):
+    return [[0.1] * 768]  # Example of an embedding with 768 dimensions
+
+# Define mock chat response function for local testing
+def mock_chat_response(context, query):
+    return "This is a mock response based on the context and query."
+
+# Initialize session state for chat history, file selections, and CSV visibility
+if 'chat_history' not in st.session_state:
+    st.session_state['chat_history'] = []
+
+if 'selected_files' not in st.session_state:
+    st.session_state['selected_files'] = {file: False for file in preloaded_files}
+
+if 'csv_visibility' not in st.session_state:
+    st.session_state['csv_visibility'] = {file: False for file in preloaded_files}
+
+if 'generated_embeddings' not in st.session_state:
+    st.session_state['generated_embeddings'] = False
+
+if check_password():
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox("Go to", ["Data", "Model", "Chat"])
+
+    if page == "Data":
+        st.title("Data Management")
+
+        # Load and select CSV files
+        st.subheader("Preloaded Files")
+        for file in preloaded_files:
+            cols = st.columns([3, 1])
+            st.session_state['selected_files'][file] = cols[0].checkbox(file, value=st.session_state['selected_files'][file])
+            if cols[1].button(f"View", key=f"view_{file}"):
+                st.session_state['csv_visibility'][file] = not st.session_state['csv_visibility'][file]
+            if st.session_state['csv_visibility'][file]:
+                st.write(f"Preview of {file}:")
+                st.dataframe(load_csv(file))
+        
+        # Upload new CSV files
+        st.subheader("Upload New Files")
+        new_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type=["csv"])
+        if new_files:
+            for new_file in new_files:
+                cols = st.columns([3, 1])
+                uploaded_files.append(new_file)
+                st.session_state['selected_files'][new_file.name] = cols[0].checkbox(new_file.name, value=True)
+                if cols[1].button(f"View", key=f"view_{new_file.name}"):
+                    st.session_state['csv_visibility'][new_file.name] = not st.session_state['csv_visibility'][new_file.name]
+                if st.session_state['csv_visibility'][new_file.name]:
+                    st.write(f"Preview of {new_file.name}:")
+                    st.dataframe(load_csv(new_file))
+
+        # Generate embeddings
+        if st.button("Generate Embeddings"):
+            selected_files = [file for file, selected in st.session_state['selected_files'].items() if selected]
+            combined_data = pd.concat([load_csv(file) for file in selected_files])
+            text_data = combined_data.to_csv(index=False)
+
+            if st.session_state['AZURE_API_KEY'] == "your-azure-api-key":
+                embeddings = generate_mock_embedding(text_data)
             else:
-                st.warning("Please enter a query.")
+                embeddings = generate_embeddings(text_data)
 
-        # Display conversation history in reverse order (most recent first)
-        for message in reversed(st.session_state.conversation_history):
-            st.write(message)
+            if embeddings is not None:
+                with open("precomputed_embeddings.pkl", "wb") as f:
+                    pickle.dump(embeddings, f)
+                with open("precomputed_metadata.pkl", "wb") as f:
+                    pickle.dump(selected_files, f)
 
-    # Data Tab
-    with tab2:
-        st.header("Data")
-        uploaded_files = st.file_uploader("Upload CSV files", accept_multiple_files=True, type=["csv"])
-        if st.session_state.selected_files is None:
-            st.session_state.selected_files = []
-        if uploaded_files:
-            for file in uploaded_files:
-                if st.checkbox(file.name, key=file.name):
-                    if file not in st.session_state.selected_files:
-                        st.session_state.selected_files.append(file)
+                st.session_state['generated_embeddings'] = True
+                st.write("Embeddings generated and saved successfully!")
+                st.write(f"Number of embeddings: {len(embeddings)}")
+                st.write(f"Files used for embeddings: {', '.join(selected_files)}")
+
+    elif page == "Model":
+        st.title("Model Configuration")
+
+        with st.expander("Embedding Model Configuration"):
+            st.subheader("OpenAI API Credentials for Embedding Model")
+            embedding_api_key = st.text_input("Embedding API Key", type="password", value=st.session_state['AZURE_API_KEY'])
+            embedding_endpoint = st.text_input("Embedding Endpoint", value=st.session_state['EMBEDDING_ENDPOINT'])
+            embedding_deployment = st.text_input("Embedding Deployment Name", value=st.session_state['EMBEDDING_DEPLOYMENT'])
+
+            if st.button("Update Embedding Credentials"):
+                st.session_state['AZURE_API_KEY'] = embedding_api_key
+                st.session_state['EMBEDDING_ENDPOINT'] = embedding_endpoint
+                st.session_state['EMBEDDING_DEPLOYMENT'] = embedding_deployment
+                st.success("Embedding credentials updated successfully!")
+
+        with st.expander("Chat Model Configuration"):
+            st.subheader("OpenAI API Credentials for Chat Model")
+            gpt4_api_key = st.text_input("Chat API Key", type="password", value=st.session_state['AZURE_API_KEY'])
+            gpt4_endpoint = st.text_input("Chat Endpoint", value=st.session_state['GPT4_ENDPOINT'])
+            gpt4_deployment = st.text_input("Chat Deployment Name", value=st.session_state['GPT4_DEPLOYMENT'])
+
+            if st.button("Update Chat Credentials"):
+                st.session_state['AZURE_API_KEY'] = gpt4_api_key
+                st.session_state['GPT4_ENDPOINT'] = gpt4_endpoint
+                st.session_state['GPT4_DEPLOYMENT'] = gpt4_deployment
+                st.success("Chat credentials updated successfully!")
+
+    elif page == "Chat":
+        st.title("Chat with GPT-4")
+
+        # Chat interface
+        user_query = st.text_input("Enter your query:")
+        if st.button("Send Query"):
+            if user_query:
+                st.session_state['chat_history'].append(f"User: {user_query}")
+                context = "\n".join(st.session_state['chat_history'])
+                selected_files = ', '.join(precomputed_metadata) if precomputed_metadata else "No files"
+
+                if st.session_state['AZURE_API_KEY'] == "your-azure-api-key":
+                    response_text = mock_chat_response(context, user_query)
                 else:
-                    if file in st.session_state.selected_files:
-                        st.session_state.selected_files.remove(file)
-        if st.button("Rebuild Context"):
-            if st.session_state.selected_files:
-                with st.spinner("Rebuilding context..."):
-                    files = [file for file in st.session_state.selected_files]
-                    rebuild_context(files, st.session_state.embedding_source, st.session_state.embedding_api_key, st.session_state.embedding_endpoint, st.session_state.embedding_deployment_name)
-            else:
-                st.warning("Please select at least one data source.")
-        if st.button("Load Precomputed Data"):
-            precomputed_embeddings, precomputed_metadata = load_precomputed_data()
-            if precomputed_embeddings is not None:
-                st.session_state.embeddings = precomputed_embeddings
-                st.session_state.metadata = precomputed_metadata
-                st.success("Precomputed data loaded successfully.")
-            else:
-                st.error("Precomputed data not found.")
-
-    # Model Settings Tab
-    with tab3:
-        st.header("Model Settings")
-        st.subheader("Embedding Model Settings")
-        embedding_api_key = st.text_input("Enter Azure OpenAI API Key for Embeddings", type="password")
-        embedding_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Embeddings")
-        embedding_deployment_name = st.text_input("Enter Embedding Model Deployment Name")
+                    response_text = get_chat_response(context, user_query, precomputed_embeddings)
+                
+                if response_text is not None:
+                    st.session_state['chat_history'].append(f"AI: {response_text}")
         
-        if st.button("Submit Embedding Model Settings"):
-            st.session_state.embedding_api_key = embedding_api_key
-            st.session_state.embedding_endpoint = embedding_endpoint
-            st.session_state.embedding_deployment_name = embedding_deployment_name
-            st.success("Embedding model settings updated:")
-            st.write(f"API Key: {st.session_state.embedding_api_key}")
-            st.write(f"Endpoint: {st.session_state.embedding_endpoint}")
-            st.write(f"Deployment Name: {st.session_state.embedding_deployment_name}")
-
-        st.subheader("Chat Model Settings")
-        chat_api_key = st.text_input("Enter Azure OpenAI API Key for Chat", type="password")
-        chat_endpoint = st.text_input("Enter Azure OpenAI Endpoint URL for Chat")
-        chat_deployment_name = st.text_input("Enter Chat Model Deployment Name")
-        
-        if st.button("Submit Chat Model Settings"):
-            st.session_state.chat_api_key = chat_api_key
-            st.session_state.chat_endpoint = chat_endpoint
-            st.session_state.chat_deployment_name = chat_deployment_name
-            st.success("Chat model settings updated:")
-            st.write(f"API Key: {st.session_state.chat_api_key}")
-            st.write(f"Endpoint: {st.session_state.chat_endpoint}")
-            st.write(f"Deployment Name: {st.session_state.chat_deployment_name}")
+        # Display chat history
+        st.write("### Chat History")
+        for message in reversed(st.session_state['chat_history']):
+            st.write(message)

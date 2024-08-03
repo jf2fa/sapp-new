@@ -1,85 +1,49 @@
-import requests
-import json
+import openai
+import os
+import pandas as pd
 
-# Variables to test
-embedding_api_key = 'your_embedding_api_key'
-embedding_endpoint = 'your_embedding_endpoint'
-embedding_deployment_name = 'your_embedding_deployment_name'
+# Set your OpenAI API key and endpoints
+AZURE_API_KEY = "your-azure-api-key"
+EMBEDDING_ENDPOINT = "your-embedding-endpoint"
+GPT4_ENDPOINT = "your-gpt4-endpoint"
+EMBEDDING_DEPLOYMENT = "text-embedding-3-small"
+GPT4_DEPLOYMENT = "gpt-4o"
 
-chat_api_key = 'your_chat_api_key'
-chat_endpoint = 'your_chat_endpoint'
-chat_deployment_name = 'your_chat_deployment_name'
+openai.api_key = AZURE_API_KEY
 
-def test_embedding_model(api_key, endpoint, deployment_name):
-    # Correctly formatted URL for Azure OpenAI embeddings endpoint
-    url = f"{endpoint}/openai/deployments/{deployment_name}/embeddings?api-version=2022-12-01"
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": api_key
-    }
-    data = {
-        "input": ["This is a test input for the embedding model."]
-    }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        print("Embedding model test successful!")
-        print("Response:", response.json())
-        # Expected output (example):
-        # {
-        #   "data": [
-        #     {
-        #       "embedding": [0.0023, 0.0152, -0.0076, ...],
-        #       "index": 0
-        #     }
-        #   ]
-        # }
-    else:
-        print("Embedding model test failed.")
-        print("Status code:", response.status_code)
-        print("Response:", response.text)
+def test_embedding_api(text):
+    try:
+        response = openai.Embedding.create(
+            input=text,
+            engine=EMBEDDING_DEPLOYMENT,
+            endpoint=EMBEDDING_ENDPOINT
+        )
+        embedding = response['data'][0]['embedding']
+        print("Embedding API test successful!")
+        print(f"Embedding: {embedding[:5]}...")  # Print the first 5 dimensions for brevity
+    except Exception as e:
+        print(f"Error testing Embedding API: {e}")
 
-def test_chat_model(api_key, endpoint, deployment_name):
-    # Correctly formatted URL for Azure OpenAI chat completion endpoint
-    url = f"{endpoint}/openai/deployments/{deployment_name}/completions?api-version=2022-12-01"
-    headers = {
-        "Content-Type": "application/json",
-        "api-key": api_key
-    }
-    data = {
-        "prompt": "This is a test input for the chat model.",
-        "max_tokens": 50
-    }
-    response = requests.post(url, headers=headers, json=data)
-    if response.status_code == 200:
-        print("Chat model test successful!")
-        print("Response:", response.json())
-        # Expected output (example):
-        # {
-        #   "id": "cmpl-1234567890",
-        #   "object": "text_completion",
-        #   "created": 1234567890,
-        #   "model": "text-davinci-003",
-        #   "choices": [
-        #     {
-        #       "text": "This is the response from the chat model.",
-        #       "index": 0,
-        #       "logprobs": null,
-        #       "finish_reason": "stop"
-        #     }
-        #   ],
-        #   "usage": {
-        #     "prompt_tokens": 10,
-        #     "completion_tokens": 10,
-        #     "total_tokens": 20
-        #   }
-        # }
-    else:
-        print("Chat model test failed.")
-        print("Status code:", response.status_code)
-        print("Response:", response.text)
+def test_chat_api(context, user_query):
+    try:
+        response = openai.Completion.create(
+            engine=GPT4_DEPLOYMENT,
+            prompt=f"Context: {context}\n\nUser: {user_query}\n\nAI:",
+            max_tokens=150,
+            endpoint=GPT4_ENDPOINT
+        )
+        response_text = response['choices'][0]['text']
+        print("Chat API test successful!")
+        print(f"AI Response: {response_text}")
+    except Exception as e:
+        print(f"Error testing Chat API: {e}")
 
-# Test the embedding model
-test_embedding_model(embedding_api_key, embedding_endpoint, embedding_deployment_name)
+if __name__ == "__main__":
+    # Test embedding API
+    test_text = "This is a test sentence for generating embeddings."
+    test_embedding_api(test_text)
 
-# Test the chat model
-test_chat_model(chat_api_key, chat_endpoint, chat_deployment_name)
+    # Test chat API
+    test_context = "This is the context for the conversation."
+    test_query = "What is the capital of France?"
+    test_chat_api(test_context, test_query)

@@ -5,7 +5,7 @@ import os
 
 # Define the CSV path variables
 example_csv_path = 'synthetic_survey_responses_1.csv'
-output_csv_path = 'nmssynthetic_survey_responses_1.csv'
+output_csv_path = 'synthetic_survey_responses_1_synthetic.csv'
 num_rows = 100  # Number of rows of synthetic data to generate
 description_file = 'description.json'  # Temporary file to store the data description
 temp_csv_path = 'temp_example.csv'  # Temporary CSV file path
