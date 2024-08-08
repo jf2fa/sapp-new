@@ -1,9 +1,7 @@
 import streamlit as st
-import os
 from auth_module import check_password
 from data_management import data_management
 from chat_module import chat
-from db import db_management
 
 # Set default values for session state
 if 'AZURE_API_KEY' not in st.session_state:
@@ -17,20 +15,20 @@ if 'GPT4_DEPLOYMENT' not in st.session_state:
 if 'chat_history' not in st.session_state:
     st.session_state['chat_history'] = []
 
-if 'selected_files' not in st.session_state:
-    st.session_state['selected_files'] = {file: False for file in ["synthetic_survey_responses_1.csv", "synthetic_survey_responses_2.csv", "synthetic_survey_responses_3.csv", "synthetic_survey_responses.csv"]}
+if 'context_files' not in st.session_state:
+    st.session_state['context_files'] = {}
+
+if 'confirmed_context_files' not in st.session_state:
+    st.session_state['confirmed_context_files'] = []
 
 if 'csv_visibility' not in st.session_state:
-    st.session_state['csv_visibility'] = {file: False for file in ["synthetic_survey_responses_1.csv", "synthetic_survey_responses_2.csv", "synthetic_survey_responses_3.csv", "synthetic_survey_responses.csv"]}
+    st.session_state['csv_visibility'] = {}
 
 if 'db_connection_string' not in st.session_state:
     st.session_state['db_connection_string'] = ""
 
-if 'db_query' not in st.session_state:
-    st.session_state['db_query'] = ""
-
-if 'db_visibility' not in st.session_state:
-    st.session_state['db_visibility'] = False
+if 'db_tables' not in st.session_state:
+    st.session_state['db_tables'] = []
 
 if check_password():
     st.sidebar.image("logoapp.png", use_column_width=True)  # Display the logo at the top of the sidebar
@@ -39,9 +37,7 @@ if check_password():
 
     if page == "Data":
         st.title("Data Management")
-
         data_management()
-        db_management()
 
     elif page == "Model":
         st.title("Model Configuration")
