@@ -28,9 +28,6 @@ pip-delete-this-directory.txt
 *.pyc
 *.pyd
 
-# Docker
-Dockerfile
-
 # macOS
 .DS_Store
 
