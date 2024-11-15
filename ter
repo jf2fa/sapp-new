@@ -1,78 +1,64 @@
-name: Clone and Upload to Azure Blob Storage
+name: Transfer Files to Azure Blob Storage
 
 on:
   workflow_dispatch:
 
 jobs:
-  upload-folders-to-azure:
+  transfer:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout This Repository
-        uses: actions/checkout@v3
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
 
-      - name: Install Azure CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates curl apt-transport-https lsb-release gnupg
-          curl -sL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
-          AZ_REPO=$(lsb_release -cs)
-          echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
-          sudo apt-get update
-          sudo apt-get install -y azure-cli
+    - name: Configure Git for Sparse Checkout
+      run: |
+        git sparse-checkout init --cone
+        git remote set-url origin https://github.com/department-of-veterans-affairs/va.gov-team.git
 
-      - name: Initialize Sparse Checkout
-        run: |
-          git init cloned_repo
-          cd cloned_repo
-          git remote add origin https://github.com/department-of-veterans-affairs/va.gov-team.git
-          git config core.sparseCheckout true
+    - name: Sequential Folder Processing
+      env:
+        AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+        AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+      run: |
+        # Define top-level folders
+        folders=("assets" "impact-reviews" "octo" "platform" "products" "scripts" "strategy" "teams" "templates")
 
-      - name: Clone and Upload Folders
-        env:
-          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-        run: |
-          # List of folders to process
-          FOLDERS=("folder1" "folder2" "folder3") # Replace with actual folder names
-
-          for FOLDER in "${FOLDERS[@]}"; do
-            echo "Processing folder: $FOLDER"
-            
-            # Configure sparse-checkout for the specific folder
-            echo "$FOLDER/*" > cloned_repo/.git/info/sparse-checkout
-            
-            # Try to pull the folder from the repo
-            set +e
-            cd cloned_repo
+        for folder in "${folders[@]}"; do
+          if [ "$folder" = "products" ]; then
+            # Process subfolders in 'products' folder
+            git sparse-checkout set "$folder"
             git pull origin main
-            if [ $? -ne 0 ]; then
-              echo "Error pulling folder $FOLDER. Skipping..."
-              cd ..
-              continue
-            fi
-            cd ..
-            set -e
-            
-            # Try to upload the folder to Azure Blob Storage
-            set +e
+            subfolders=($(find "$folder" -mindepth 1 -maxdepth 1 -type d))
+            for subfolder in "${subfolders[@]}"; do
+              echo "Processing subfolder: $subfolder"
+              # Upload subfolder to Azure Blob Storage
+              az storage blob upload-batch \
+                --source "$subfolder" \
+                --destination "$subfolder" \
+                --account-name "$AZURE_STORAGE_ACCOUNT" \
+                --account-key "$AZURE_STORAGE_KEY"
+              echo "Cleaning up subfolder: $subfolder"
+              rm -rf "$subfolder"  # Remove subfolder after upload
+            done
+          else
+            echo "Processing folder: $folder"
+            git sparse-checkout set "$folder"
+            git pull origin main
+            # Upload folder to Azure Blob Storage
             az storage blob upload-batch \
-              --account-name $AZURE_STORAGE_ACCOUNT \
-              --account-key $AZURE_STORAGE_KEY \
-              --destination my-container-name \
-              --source cloned_repo/$FOLDER \
-              --if-none-match "*"
-            if [ $? -ne 0 ]; then
-              echo "Error uploading folder $FOLDER to Azure. Skipping..."
-              # Proceed with cleanup and move to the next folder
-            fi
-            set -e
-            
-            # Clean up folder after processing
-            echo "Cleaning up folder: $FOLDER"
-            rm -rf cloned_repo/$FOLDER
-          done
-          
-      - name: Final Cleanup
-        run: |
-          echo "Cleaning up residual files..."
-          rm -rf cloned_repo
+              --source "$folder" \
+              --destination "$folder" \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --account-key "$AZURE_STORAGE_KEY"
+            echo "Cleaning up folder: $folder"
+            rm -rf "$folder"  # Remove folder after upload
+          fi
+          git sparse-checkout set "" # Clear sparse checkout configuration
+        done
+
+    - name: Cleanup Sparse Checkout
+      run: |
+        git sparse-checkout disable
