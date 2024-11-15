@@ -1,0 +1,97 @@
+name: Transfer Files to Azure Blob Storage
+
+on:
+  workflow_dispatch:
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
+
+    - name: Configure Git for Sparse Checkout
+      run: |
+        echo "Initializing sparse checkout..."
+        git sparse-checkout init --cone
+        git remote set-url origin https://github.com/department-of-veterans-affairs/va.gov-team.git
+        echo "Sparse checkout configured successfully."
+
+    - name: Sequential Folder Processing with Logging and Error Handling
+      env:
+        AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+        AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+      run: |
+        # Define top-level folders
+        folders=("assets" "impact-reviews" "octo" "platform" "products" "scripts" "strategy" "teams" "templates")
+        log_file="process_log.txt"
+        error_file="error_log.txt"
+
+        echo "Starting folder processing..." | tee -a $log_file
+        echo "Log file: $log_file" | tee -a $log_file
+        echo "Error file: $error_file" | tee -a $log_file
+
+        for folder in "${folders[@]}"; do
+          echo "Processing folder: $folder" | tee -a $log_file
+          if [ "$folder" = "products" ]; then
+            # Process subfolders in 'products'
+            git sparse-checkout set "$folder"
+            if ! git pull origin main; then
+              echo "Error pulling folder: $folder" | tee -a $error_file
+              exit 1
+            fi
+            subfolders=($(find "$folder" -mindepth 1 -maxdepth 1 -type d))
+            for subfolder in "${subfolders[@]}"; do
+              echo "Processing subfolder: $subfolder" | tee -a $log_file
+              if ! az storage blob upload-batch \
+                --source "$subfolder" \
+                --destination "$subfolder" \
+                --account-name "$AZURE_STORAGE_ACCOUNT" \
+                --account-key "$AZURE_STORAGE_KEY"; then
+                echo "Error uploading subfolder: $subfolder" | tee -a $error_file
+                exit 1
+              fi
+              echo "Upload completed for subfolder: $subfolder" | tee -a $log_file
+              echo "Cleaning up subfolder: $subfolder" | tee -a $log_file
+              rm -rf "$subfolder" || echo "Failed to clean up subfolder: $subfolder" | tee -a $error_file
+            done
+          else
+            git sparse-checkout set "$folder"
+            if ! git pull origin main; then
+              echo "Error pulling folder: $folder" | tee -a $error_file
+              exit 1
+            fi
+            if ! az storage blob upload-batch \
+              --source "$folder" \
+              --destination "$folder" \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --account-key "$AZURE_STORAGE_KEY"; then
+              echo "Error uploading folder: $folder" | tee -a $error_file
+              exit 1
+            fi
+            echo "Upload completed for folder: $folder" | tee -a $log_file
+            echo "Cleaning up folder: $folder" | tee -a $log_file
+            rm -rf "$folder" || echo "Failed to clean up folder: $folder" | tee -a $error_file
+          fi
+          echo "Clearing sparse-checkout configuration for folder: $folder" | tee -a $log_file
+          git sparse-checkout set "" || echo "Failed to clear sparse-checkout for folder: $folder" | tee -a $error_file
+        done
+        echo "All folders processed successfully!" | tee -a $log_file
+
+    - name: Cleanup Sparse Checkout
+      run: |
+        echo "Disabling sparse checkout..." | tee -a process_log.txt
+        git sparse-checkout disable || echo "Failed to disable sparse checkout" | tee -a error_log.txt
+        echo "Sparse checkout disabled successfully." | tee -a process_log.txt
+
+    - name: Upload Logs for Debugging
+      if: failure()
+      run: |
+        echo "Uploading logs for debugging..."
+        zip logs.zip process_log.txt error_log.txt
+        echo "Logs uploaded for debugging."
+      with:
+        name: logs.zip
