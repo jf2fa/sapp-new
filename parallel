@@ -1,0 +1,50 @@
+name: Transfer Files to Azure Blob Storage
+
+on:
+  workflow_dispatch:
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository with Sparse Checkout
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
+
+    - name: Configure Git for Sparse Checkout
+      run: |
+        git sparse-checkout init --cone
+        git remote set-url origin https://github.com/department-of-veterans-affairs/va.gov-team.git
+
+    - name: Process Top-Level Folders Sequentially
+      env:
+        AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+        AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+      run: |
+        folders=("assets" "impact-reviews" "octo" "platform" "products" "scripts" "strategy" "teams" "templates")
+        for folder in "${folders[@]}"; do
+          if [ "$folder" = "products" ]; then
+            # Process subfolders in products sequentially
+            git sparse-checkout set "$folder"
+            git pull origin main
+            subfolders=($(ls -d $folder/*/))
+            for subfolder in "${subfolders[@]}"; do
+              echo "Processing subfolder: $subfolder"
+              # Upload subfolder to Azure Blob Storage
+              az storage blob upload-batch -d "$subfolder" -s "$subfolder" --account-name "$AZURE_STORAGE_ACCOUNT" --account-key "$AZURE_STORAGE_KEY"
+            done
+          else
+            echo "Processing folder: $folder"
+            git sparse-checkout set "$folder"
+            git pull origin main
+            # Upload folder to Azure Blob Storage
+            az storage blob upload-batch -d "$folder" -s "$folder" --account-name "$AZURE_STORAGE_ACCOUNT" --account-key "$AZURE_STORAGE_KEY"
+          fi
+          git sparse-checkout set "" # Clear sparse checkout to avoid conflicts
+        done
+
+    - name: Cleanup Sparse Checkout
+      run: |
+        git sparse-checkout disable
