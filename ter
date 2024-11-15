@@ -10,10 +10,15 @@ jobs:
       - name: Checkout This Repository
         uses: actions/checkout@v3
 
-      - name: Setup Azure CLI
-        uses: azure/setup-cli@v3
-        with:
-          version: '2.x'
+      - name: Install Azure CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates curl apt-transport-https lsb-release gnupg
+          curl -sL https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+          AZ_REPO=$(lsb_release -cs)
+          echo "deb [arch=amd64] https://packages.microsoft.com/repos/azure-cli/ $AZ_REPO main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update
+          sudo apt-get install -y azure-cli
 
       - name: Initialize Sparse Checkout
         run: |
@@ -53,7 +58,7 @@ jobs:
             az storage blob upload-batch \
               --account-name $AZURE_STORAGE_ACCOUNT \
               --account-key $AZURE_STORAGE_KEY \
-              --destination githubflow \
+              --destination my-container-name \
               --source cloned_repo/$FOLDER \
               --if-none-match "*"
             if [ $? -ne 0 ]; then
