@@ -1,0 +1,73 @@
+name: Clone and Upload to Azure Blob Storage
+
+on:
+  workflow_dispatch:
+
+jobs:
+  upload-folders-to-azure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout This Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Azure CLI
+        uses: azure/setup-cli@v3
+        with:
+          version: '2.x'
+
+      - name: Initialize Sparse Checkout
+        run: |
+          git init cloned_repo
+          cd cloned_repo
+          git remote add origin https://github.com/department-of-veterans-affairs/va.gov-team.git
+          git config core.sparseCheckout true
+
+      - name: Clone and Upload Folders
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+        run: |
+          # List of folders to process
+          FOLDERS=("folder1" "folder2" "folder3") # Replace with actual folder names
+
+          for FOLDER in "${FOLDERS[@]}"; do
+            echo "Processing folder: $FOLDER"
+            
+            # Configure sparse-checkout for the specific folder
+            echo "$FOLDER/*" > cloned_repo/.git/info/sparse-checkout
+            
+            # Try to pull the folder from the repo
+            set +e
+            cd cloned_repo
+            git pull origin main
+            if [ $? -ne 0 ]; then
+              echo "Error pulling folder $FOLDER. Skipping..."
+              cd ..
+              continue
+            fi
+            cd ..
+            set -e
+            
+            # Try to upload the folder to Azure Blob Storage
+            set +e
+            az storage blob upload-batch \
+              --account-name $AZURE_STORAGE_ACCOUNT \
+              --account-key $AZURE_STORAGE_KEY \
+              --destination githubflow \
+              --source cloned_repo/$FOLDER \
+              --if-none-match "*"
+            if [ $? -ne 0 ]; then
+              echo "Error uploading folder $FOLDER to Azure. Skipping..."
+              # Proceed with cleanup and move to the next folder
+            fi
+            set -e
+            
+            # Clean up folder after processing
+            echo "Cleaning up folder: $FOLDER"
+            rm -rf cloned_repo/$FOLDER
+          done
+          
+      - name: Final Cleanup
+        run: |
+          echo "Cleaning up residual files..."
+          rm -rf cloned_repo
